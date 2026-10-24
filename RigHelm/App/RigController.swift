@@ -380,6 +380,7 @@ final class RigController {
         if !state.transmitting {
             send("TX1;")
             txStartedAt = Date()
+            updateMicGate()
         }
     }
 
@@ -463,7 +464,10 @@ final class RigController {
     }
 
     private func updateMicGate() {
-        let on = phoneMic && transmitAllowed && cat?.keyedByUs == true && state.transmitting && state.txMode?.isVoice == true
+        // Open as soon as this phone keys, not when the radio's TX state comes
+        // back, so the first words aren't cut off. The server checks again.
+        let keying = state.transmitting || txStartedAt != nil
+        let on = phoneMic && transmitAllowed && cat?.keyedByUs == true && keying && state.txMode?.isVoice == true
         micGate.set(on)
         if sendingMic != on { sendingMic = on }
     }

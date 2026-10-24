@@ -517,7 +517,7 @@ struct TransmitCard: View {
             if rig.targetBeacon?.mic == false { return "⚠︎ The station does not accept microphone audio (RigHelm → Remote → Accept microphone audio)" }
             return "Hold the button below to talk through the phone"
         }
-        return "Radio mic: the station's own microphone is used"
+        return "Radio mic: the station's own microphone is used. Tap RADIO MIC to talk through the phone."
     }
 }
 
@@ -527,8 +527,9 @@ struct PTTBar: View {
     @State private var pressed = false
 
     var body: some View {
-        let txing = rig.state.transmitting
         let locked = !rig.canTransmit
+        // Show it keyed the moment the button goes down, ahead of the radio's answer.
+        let txing = rig.state.transmitting || (pressed && !locked)
         HStack(spacing: 10) {
             Image(systemName: locked ? "lock.fill" : (txing ? "dot.radiowaves.left.and.right" : "mic.fill"))
                 .font(.system(size: 20, weight: .bold))

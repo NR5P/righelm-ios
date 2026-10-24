@@ -183,6 +183,10 @@ public final class CatClient {
                     // Show the change right away; the radio's answer confirms it.
                     if !CatCommand.isTransmit(f) && state.apply(f) { dirty = true }
                     if let rb = CatCommand.readback(for: f) { later.append((now.addingTimeInterval(0.3), rb)) }
+                    // Keying: confirm it as soon as the radio has had time to switch.
+                    if f.hasPrefix("TX") || f.hasPrefix("MX") {
+                        later += [0.05, 0.12].map { (now.addingTimeInterval($0), "TX;") }
+                    }
                     if CatCommand.movesVFO(f) {
                         later += CatCommand.vfoKeys.map { (now.addingTimeInterval(0.4), $0) }
                     }
