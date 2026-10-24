@@ -257,12 +257,11 @@ struct MeterCard: View {
             VStack(spacing: 7) {
                 if s.transmitting {
                     let po = MeterCal.interpolate(MeterCal.po, s.meter(.po) ?? 0)
+                    // In the S-meter's place, with ALC and SWR on the thin line
+                    // under it where the audio level was: the card keeps its size.
                     MeterBar(label: "PO", fraction: po / 100, text: String(format: "%.0f W", po), color: Theme.amber,
-                             ticks: [(0.25, "25"), (0.5, "50"), (0.75, "75")])
-                    let swr = MeterCal.interpolate(MeterCal.swr, s.meter(.swr) ?? 0)
-                    MeterBar(label: "SWR", fraction: Double(s.meter(.swr) ?? 0) / 255, text: String(format: "%.1f", swr), color: Theme.cyan, redFrom: 89.0 / 255)
-                    let alc = Double(s.meter(.alc) ?? 0) / 255
-                    MeterBar(label: "ALC", fraction: alc, text: String(format: "%.0f%%", alc * 100), color: Theme.cyan, redFrom: 0.5)
+                             ticks: [(0.25, "25"), (0.5, "50"), (0.75, "75")], height: 18)
+                    TxMeterLine()
                 } else {
                     MeterBar(label: "S", fraction: Double(s.sMeter) / 255, text: MeterCal.sText(s.sMeter), color: Theme.green, redFrom: 130.0 / 255,
                              ticks: [(27.0 / 255, "3"), (55.0 / 255, "5"), (80.0 / 255, "7"), (130.0 / 255, "9"), (172.0 / 255, "+20"), (220.0 / 255, "+40")],
@@ -276,6 +275,45 @@ struct MeterCard: View {
                     Text("HI-SWR").font(.caption.bold()).foregroundStyle(Theme.red)
                 }
             }
+        }
+    }
+}
+
+/// ALC and SWR side by side on one thin line, under PO.
+struct TxMeterLine: View {
+    @Environment(RigController.self) private var rig
+
+    var body: some View {
+        let s = rig.state
+        let alc = Double(s.meter(.alc) ?? 0) / 255
+        let swrRaw = s.meter(.swr) ?? 0
+        let swr = MeterCal.interpolate(MeterCal.swr, swrRaw)
+        HStack(spacing: 14) {
+            slim("ALC", fraction: alc, text: String(format: "%.0f%%", alc * 100), color: Theme.cyan, redFrom: 0.5)
+            slim("SWR", fraction: Double(swrRaw) / 255, text: String(format: "%.1f", swr), color: Theme.cyan, redFrom: 89.0 / 255)
+        }
+    }
+
+    private func slim(_ label: String, fraction: Double, text: String, color: Color, redFrom: Double? = nil) -> some View {
+        HStack(spacing: 6) {
+            Text(label)
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(Theme.dim)
+                .frame(width: 22, alignment: .leading)
+            GeometryReader { geo in
+                let w = geo.size.width
+                let f = min(max(fraction, 0), 1)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.black.opacity(0.5))
+                    Capsule().fill(redFrom.map { f > $0 } == true ? Theme.red : color).frame(width: w * f)
+                }
+                .animation(.linear(duration: 0.12), value: f)
+            }
+            .frame(height: 4)
+            Text(text)
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 34, alignment: .trailing)
         }
     }
 }
@@ -553,18 +591,64 @@ struct PTTBar: View {
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(.ultraThinMaterial)
-        .contentShape(Rectangle())
-        .gesture(DragGesture(minimumDistance: 0)
-            .onChanged { _ in
+        .overlay(PressSurface(
+            onDown: {
                 guard !pressed else { return }
                 pressed = true
                 Haptics.heavy()
                 rig.pttDown()
-            }
-            .onEnded { _ in
+            },
+            onUp: {
                 pressed = false
                 rig.pttUp()
-            })
+            }))
         .accessibilityLabel(locked ? "Transmit locked" : "Push to talk")
+    }
+}
+
+/// Reports touch-down and lift-off with no delay. A SwiftUI drag gesture
+/// waits for the scroll view to decide the touch isn't a scroll first.
+struct PressSurface: UIViewRepresentable {
+    let onDown: () -> Void
+    let onUp: () -> Void
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+        let press = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.changed(_:)))
+        press.minimumPressDuration = 0
+        press.allowableMovement = .greatestFiniteMagnitude
+        press.cancelsTouchesInView = false
+        press.delegate = context.coordinator
+        view.addGestureRecognizer(press)
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.parent = self
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(parent: self) }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        var parent: PressSurface
+        init(parent: PressSurface) { self.parent = parent }
+
+        @objc func changed(_ g: UILongPressGestureRecognizer) {
+            switch g.state {
+            case .began: parent.onDown()
+            case .ended, .cancelled, .failed: parent.onUp()
+            default: break
+            }
+        }
+
+        // Don't let scrolling or the tab bar take the touch away mid-transmit.
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldBeRequiredToFailBy other: UIGestureRecognizer) -> Bool {
+            false
+        }
+
+        func gestureRecognizer(_ g: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer) -> Bool {
+            true
+        }
     }
 }
