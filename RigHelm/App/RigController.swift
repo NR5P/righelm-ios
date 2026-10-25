@@ -258,9 +258,8 @@ final class RigController {
         let link = AudioLink(host: server.host, port: server.port, password: password)
         let buffer = audio.buffer
         let listening = self.listening
-        let frameLen = RemoteProtocol.frameLength(rate: RemoteProtocol.audioRate)
         link.onAudio = { samples, lost in
-            if (1...5).contains(lost) { buffer.writeSilence(lost * frameLen) }
+            if (1...5).contains(lost) { buffer.writeGap(lost * samples.count) }
             buffer.write(samples, gain: listening.get ? 1 : 0)
         }
         link.onStats = { [weak self] s in

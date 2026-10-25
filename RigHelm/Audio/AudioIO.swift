@@ -2,74 +2,145 @@ import AVFoundation
 import os
 import RigHelmCore
 
-/// Holds incoming radio audio long enough to ride out Wi-Fi delivering
-/// packets in clumps, and keeps latency bounded when they arrive faster
-/// than they play.
+/// Playout buffer for radio audio, which Wi-Fi often delivers in clumps:
+/// several 20 ms packets at once, 100 ms or more apart. It waits until it
+/// holds `target` before playing, and when it runs dry anyway it fades out
+/// (no click), deepens itself, and fades back in. Latency it turns out not
+/// to need is taken back slowly by skipping single samples. Same design as
+/// the Mac app's remote player.
 final class JitterBuffer {
+    /// Skip one sample in this many while trimming (0.5 %: inaudible).
+    private static let trimEvery = 200
+
     private let lock = OSAllocatedUnfairLock()
-    private var ring = [Float](repeating: 0, count: 48_000 * 2)
+    private var ring = [Float](repeating: 0, count: 19_200)
     private var readIndex = 0
     private var count = 0
-    private var priming = true
-    /// Start (and restart after running dry) once this much is waiting.
-    private var target = 4_800
-    /// More than this waiting: skip ahead to `target`.
-    private var ceiling = 14_400
+    private var playing = false
+    /// Depth to build up before (re)starting.
+    private var target = 2_400
+    private var maxTarget = 9_600
+    /// Lowest depth seen in the current window, samples played in it.
+    private var low = Int.max
+    private var played = 0
+    private var window = 240_000
+    /// Samples still to skip.
+    private var trim = 0
+    private var last: Float = 0
+    private var gain: Float = 0
+    private var gainStep: Float = 1 / 120
+    /// Fade length around gaps, and samples of the next write still to fade in.
+    private var fadeLength = 120
+    private var fadeIn = 0
 
     func configure(rate: Int) {
         lock.withLockUnchecked {
-            target = rate / 5 // 200 ms
-            ceiling = rate * 3 / 5 // 600 ms
+            target = rate / 10 // 100 ms to start
+            maxTarget = rate * 2 / 5 // may grow to 400 ms
+            ring = [Float](repeating: 0, count: maxTarget * 2)
+            window = rate * 10
+            fadeLength = max(rate / 200, 1) // 5 ms
+            gainStep = 1 / Float(fadeLength)
             readIndex = 0
             count = 0
-            priming = true
+            playing = false
+            low = .max
+            played = 0
+            trim = 0
+            last = 0
+            gain = 0
+            fadeIn = 0
         }
     }
 
     func write(_ samples: [Int16], gain: Float) {
         let scale = gain / 32768
         lock.withLockUnchecked {
-            let cap = ring.count
             for s in samples {
-                ring[(readIndex + count) % cap] = Float(s) * scale
-                if count < cap { count += 1 } else { readIndex = (readIndex + 1) % cap }
-            }
-            if count > ceiling {
-                let drop = count - target
-                readIndex = (readIndex + drop) % cap
-                count -= drop
+                var v = Float(s) * scale
+                if fadeIn > 0 {
+                    v *= Float(fadeLength - fadeIn) / Float(fadeLength)
+                    fadeIn -= 1
+                }
+                append(v)
             }
         }
     }
 
-    func writeSilence(_ n: Int) {
-        write([Int16](repeating: 0, count: n), gain: 0)
+    /// Stand in for lost packets: silence that keeps the timing, with the
+    /// audio either side faded so the gap doesn't click.
+    func writeGap(_ n: Int) {
+        lock.withLockUnchecked {
+            let cap = ring.count
+            let k = min(fadeLength, count)
+            for i in 0..<k {
+                ring[(readIndex + count - k + i) % cap] *= Float(k - i) / Float(k + 1)
+            }
+            for _ in 0..<n { append(0) }
+            fadeIn = fadeLength
+        }
     }
 
     func read(into out: UnsafeMutablePointer<Float>, count n: Int) {
         lock.withLockUnchecked {
-            if priming {
-                guard count >= target else {
-                    out.update(repeating: 0, count: n)
-                    return
-                }
-                priming = false
-            }
-            let cap = ring.count
-            let take = min(n, count)
-            for i in 0..<take {
-                out[i] = ring[(readIndex + i) % cap]
-            }
-            readIndex = (readIndex + take) % cap
-            count -= take
-            if take < n {
-                (out + take).update(repeating: 0, count: n - take)
-                priming = true
-            }
+            for i in 0..<n { out[i] = next() }
         }
     }
 
-    var milliseconds: Int { lock.withLockUnchecked { count } * 1000 / max(target * 5, 1) }
+    // Both below run with the lock held.
+
+    /// Queue one sample; past capacity the oldest is dropped.
+    private func append(_ v: Float) {
+        let cap = ring.count
+        if count == cap {
+            readIndex = (readIndex + 1) % cap
+            count -= 1
+        }
+        ring[(readIndex + count) % cap] = v
+        count += 1
+    }
+
+    /// The next sample to play.
+    private func next() -> Float {
+        if !playing && count >= target {
+            playing = true
+            low = .max
+            played = 0
+        }
+        if playing {
+            if count > 0 {
+                var v = pop()
+                played += 1
+                if trim > 0 && played % Self.trimEvery == 0 && count > 0 {
+                    v = pop()
+                    trim -= 1
+                }
+                low = min(low, count)
+                if played >= window {
+                    // Keep half the target in hand at the lowest point.
+                    trim = max(low - target / 2, 0)
+                    low = .max
+                    played = 0
+                }
+                gain = min(gain + gainStep, 1)
+                last = v
+                return v * gain
+            }
+            // Ran dry: rebuild a deeper buffer before playing again.
+            playing = false
+            trim = 0
+            target = min(target + target / 2, maxTarget)
+        }
+        gain = max(gain - gainStep, 0)
+        return last * gain
+    }
+
+    private func pop() -> Float {
+        let v = ring[readIndex]
+        readIndex = (readIndex + 1) % ring.count
+        count -= 1
+        return v
+    }
 }
 
 /// Plays the radio's audio and, when asked, captures the phone's
