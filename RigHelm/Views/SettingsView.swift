@@ -28,7 +28,7 @@ struct SettingsView: View {
                         Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary)
                     }
                     if rig.audioStats.connected {
-                        LabeledContent("Stream", value: "\(rig.audioStats.rate / 1000) kHz · \(rig.audioStats.packets) packets · \(rig.audioStats.lost) lost")
+                        LabeledContent("Stream", value: "\(rig.audioStats.rate / 1000) kHz · \(rig.audioStats.packets) packets · \(rig.audioStats.lost) lost · \(rig.audioDropouts) dropouts")
                             .font(.footnote)
                     } else if let e = rig.audioStats.error {
                         Text(e).font(.footnote).foregroundStyle(Theme.red)

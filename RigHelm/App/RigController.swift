@@ -30,6 +30,8 @@ final class RigController {
 
     private(set) var state = RadioState()
     private(set) var audioStats = AudioLinkStats()
+    /// Times the phone's playout ran dry, for the Settings stream line.
+    private(set) var audioDropouts = 0
     private(set) var notes: [String] = []
 
     // MARK: Settings
@@ -291,13 +293,15 @@ final class RigController {
         let buffer = audio.buffer
         let listening = self.listening
         link.onAudio = { samples, lost in
-            if (1...5).contains(lost) { buffer.writeGap(lost * samples.count) }
+            // Short losses become silence; longer ones are only faded across.
+            if lost > 0 { buffer.writeGap(lost <= 5 ? lost * samples.count : 0) }
             buffer.write(samples, gain: listening.get ? 1 : 0)
         }
         link.onStats = { [weak self] s in
             guard let self else { return }
             let rateChanged = s.connected && s.rate != self.audio.rate
             self.audioStats = s
+            self.audioDropouts = buffer.dropouts
             if rateChanged || (s.connected && !self.audio.running) { self.restartAudio() }
         }
         let gate = micGate
