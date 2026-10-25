@@ -50,7 +50,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Transmit")
                 } footer: {
-                    Text("While this is off, nothing that keys the radio leaves the phone: PTT, MOX, TUNE and VOX are refused. It turns itself off each time the app starts or connects. The radio is also let go when the app goes to the background, after the time-out, and by the station if the phone drops off the network.")
+                    Text("While this is off, nothing that keys the radio leaves the phone: PTT, MOX, TUNE and VOX are refused. It stays on until you turn it off. The radio is also let go when the app goes to the background, after the time-out, and by the station if the phone drops off the network.")
                 }
 
                 Section {

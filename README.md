@@ -23,8 +23,8 @@ protocol a second desktop copy of RigHelm uses.
 
 ## Transmit safety
 
-- **Locked by default.** *Settings → Allow transmit from this phone* must be on, and it
-  turns itself off every time the app starts or connects to a station.
+- **Locked by default.** *Settings → Allow transmit from this phone* must be on; it
+  stays on until you turn it off.
 - While locked, nothing that keys the radio leaves the phone: `TX1`, `MX1`, `AC002`
   (tune), `KY`/`EN`/`PB` playback and `VX1` are dropped in `CatClient` before they reach
   the socket (`CatCommand.isTransmit`, the same list RigHelm uses for "Block TX").

@@ -57,10 +57,10 @@ final class RigController {
     }
 
     /// Off until the operator turns it on in Settings. While off, nothing
-    /// that transmits leaves the phone. Not saved: every launch and every
-    /// new connection starts locked.
-    var transmitAllowed = false {
+    /// that transmits leaves the phone. Saved, so it stays on once allowed.
+    var transmitAllowed: Bool = UserDefaults.standard.bool(forKey: "transmitAllowed") {
         didSet {
+            UserDefaults.standard.set(transmitAllowed, forKey: "transmitAllowed")
             txAllowedFlag.set(transmitAllowed)
             if !transmitAllowed { unkey() }
         }
@@ -181,7 +181,6 @@ final class RigController {
         saved.insert(server, at: 0)
         SavedServers.save(saved)
         UserDefaults.standard.set(server.id, forKey: "lastServer")
-        transmitAllowed = false
         target = server
         phase = .connecting
         serverName = server.name
