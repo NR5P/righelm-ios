@@ -4,7 +4,7 @@ import RigHelmCore
 import UIKit
 
 /// Everything the app knows and does: finding stations, the CAT and audio
-/// sessions to one, the phone mic, and transmit safety. Used on the main
+/// sessions to one, the phone mic, the phone CW key, and transmit safety. Used on the main
 /// thread only.
 @Observable
 final class RigController {
@@ -62,7 +62,10 @@ final class RigController {
         didSet {
             UserDefaults.standard.set(transmitAllowed, forKey: "transmitAllowed")
             txAllowedFlag.set(transmitAllowed)
-            if !transmitAllowed { unkey() }
+            if !transmitAllowed {
+                unkey()
+                cwDisarm("transmit was locked")
+            }
         }
     }
 
@@ -96,6 +99,31 @@ final class RigController {
     private(set) var sendingMic = false
     private(set) var latched = false
     private(set) var txStartedAt: Date?
+    // MARK: CW key
+
+    /// The phone key: CW keyed from this phone over a `KEY` session, like
+    /// RigHelm's COMPUTER KEY. Never on at launch.
+    private(set) var cwArmed = false
+    private(set) var cwStatus = CwStatus()
+    /// Why the phone key went back to the radio's key by itself.
+    private(set) var cwDisarmedReason: String?
+
+    var keyerMode: KeyerMode = KeyerMode(rawValue: UserDefaults.standard.string(forKey: "keyerMode") ?? "") ?? .iambicB {
+        didSet {
+            UserDefaults.standard.set(keyerMode.rawValue, forKey: "keyerMode")
+            if cwArmed && keyerMode != oldValue { setPhoneKey(true) }
+        }
+    }
+
+    /// Play a sidetone on the phone while keying.
+    var cwSidetone: Bool = UserDefaults.standard.bool(forKey: "cwSidetone") {
+        didSet {
+            UserDefaults.standard.set(cwSidetone, forKey: "cwSidetone")
+            audio.sidetone.setEnabled(cwSidetone && cwArmed)
+            if cwArmed { restartAudioIfNeeded() }
+        }
+    }
+
     /// A transmit button was pressed while transmit is locked.
     var showLockedHint = false
     var micPermissionDenied = false
@@ -110,6 +138,9 @@ final class RigController {
     private let listening = Locked(true)
     private let micGate = Locked(false)
     private var ticker: Timer?
+    private var keyer: CwKeyer?
+    /// Last paddle state given to the keyer.
+    private var sentPaddles = (dit: false, dah: false)
     /// The tuned frequency shown while the knob turns, ahead of the radio.
     private var pendingFreq: (hz: Int, vfoB: Bool, until: Date)?
     private var lastFreqSend = Date.distantPast
@@ -204,6 +235,8 @@ final class RigController {
     func disconnect() {
         guard target != nil else { return }
         unkey()
+        setPhoneKey(false)
+        cwDisarmedReason = nil
         if phoneMic { setPhoneMic(false) }
         cat?.stop()
         cat = nil
@@ -278,8 +311,8 @@ final class RigController {
     /// (Re)start the phone's audio for the current settings.
     func restartAudio() {
         guard target != nil else { return }
-        // Neither listening nor talking: no audio session at all.
-        guard receiveAudio || phoneMic else {
+        // Neither listening, talking nor a sidetone: no audio session at all.
+        guard needsAudio else {
             link?.stop()
             link = nil
             audio.stop()
@@ -295,6 +328,13 @@ final class RigController {
         } catch {
             note("audio: \(error.localizedDescription)")
         }
+    }
+
+    private var needsAudio: Bool { receiveAudio || phoneMic || (cwArmed && cwSidetone) }
+
+    /// Start or stop the audio when the sidetone alone needs it.
+    private func restartAudioIfNeeded() {
+        if needsAudio != audio.running || link == nil && needsAudio { restartAudio() }
     }
 
     // MARK: - Commands
@@ -470,12 +510,94 @@ final class RigController {
         if sendingMic != on { sendingMic = on }
     }
 
+    // MARK: CW key
+
+    /// Switch between the radio's own key (default) and keying from this
+    /// phone. Arming puts the radio in CW with break-in, so key-down
+    /// transmits, and opens a `KEY` session to the station.
+    func setPhoneKey(_ on: Bool) {
+        keyer?.stop()
+        keyer = nil
+        sentPaddles = (false, false)
+        audio.sidetone.key(false)
+        if !on {
+            if cwArmed {
+                cwArmed = false
+                cwStatus = CwStatus()
+                audio.sidetone.setEnabled(false)
+                restartAudioIfNeeded()
+            }
+            return
+        }
+        guard canTransmit, let server = target else {
+            cwArmed = false
+            showLockedHint = true
+            return
+        }
+        cwDisarmedReason = nil
+        if state.txMode?.isCW != true { send("MD03;") }
+        if !state.breakIn { send("BI1;") }
+        let password = Keychain.password(for: server.id) ?? ""
+        let tone = audio.sidetone
+        keyer = CwKeyer(mode: keyerMode, wpm: state.keySpeed >= 4 ? state.keySpeed : 20, onKey: { tone.key($0) }) {
+            try RemoteKeyLine(host: server.host, port: server.port, password: password)
+        }
+        cwArmed = true
+        cwStatus = CwStatus()
+        tone.setEnabled(cwSidetone)
+        restartAudioIfNeeded()
+        note("CW key armed (\(keyerMode.label))")
+    }
+
+    private func cwDisarm(_ why: String) {
+        guard cwArmed else { return }
+        setPhoneKey(false)
+        cwDisarmedReason = why
+        note("CW key back to the radio's key: \(why)")
+    }
+
+    /// Paddle (or straight key) state from the key pad.
+    func cwPaddles(dit: Bool, dah: Bool) {
+        guard let keyer, dit != sentPaddles.dit || dah != sentPaddles.dah else { return }
+        sentPaddles = (dit, dah)
+        keyer.input(.paddles(dit: dit, dah: dah))
+    }
+
+    func cwSendText(_ text: String) {
+        guard let keyer, !text.trimmingCharacters(in: .whitespaces).isEmpty else { return }
+        keyer.input(.text(text))
+    }
+
+    func cwStop() {
+        keyer?.input(.stop)
+    }
+
+    /// Keep the phone key's status fresh and let go when it should no
+    /// longer be live (the same rules as RigHelm's computer key).
+    private func cwTick() {
+        guard let k = keyer else { return }
+        let st = k.status
+        if st != cwStatus { cwStatus = st }
+        if state.keySpeed >= 4 { k.setWPM(state.keySpeed) }
+        let settled = ProcessInfo.processInfo.systemUptime - k.armedAt > 3
+        if let e = st.error {
+            cwDisarm(e)
+        } else if !isConnected {
+            cwDisarm("the station disconnected")
+        } else if settled && state.txMode?.isCW != true {
+            cwDisarm("the radio left CW mode")
+        } else if k.idleFor > CwKeyer.idleDisarm {
+            cwDisarm("not used for 10 minutes")
+        }
+    }
+
     // MARK: - Housekeeping
 
     private func tick() {
         let level = audio.micLevelDb.get
         if abs(level - micLevelDb) > 0.5 { micLevelDb = level }
         updateMicGate()
+        cwTick()
         if let t = txStartedAt, Date().timeIntervalSince(t) > Double(txTimeoutSeconds) {
             unkey()
             note("transmit time-out: let go after \(txTimeoutSeconds / 60) min")
@@ -491,6 +613,7 @@ final class RigController {
     /// a phone in a pocket.
     func enteredBackground() {
         unkey()
+        cwDisarm("the app went to the background")
         if target == nil { discovery.stop() }
     }
 

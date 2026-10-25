@@ -20,6 +20,11 @@ protocol a second desktop copy of RigHelm uses.
   when switched off or on disconnect. The microphone goes out only while this phone has
   keyed the radio in a phone mode, and the station must have *Accept microphone audio
   for transmit* turned on.
+- **CW key.** RADIO KEY / PHONE KEY on the Operate page, like RigHelm's COMPUTER KEY. The
+  phone key puts the radio in CW with break-in on and opens a `KEY` session; paddles take
+  the place of push-to-talk: left half = dit, right half = dah, both = squeeze (straight
+  key, iambic A or B), plus typed text, the radio's keyer speed, and an optional sidetone
+  on the phone. The timing is made on the phone; the station keys its radio's port.
 
 ## Transmit safety
 
@@ -31,6 +36,11 @@ protocol a second desktop copy of RigHelm uses.
 - The phone lets go when the app goes to the background, after a time-out (3 min by
   default), and when transmit is locked again. The station un-keys a client that drops
   off the network within 5 s.
+- The CW key is never on at launch, and only arms while transmit is allowed. It goes back
+  to the radio's key when the station disconnects, the radio leaves CW, transmit is
+  locked, the app goes to the background, or after 10 minutes unused. A key held down
+  longer than 6 s is released (by the phone and by the station), and the station lets go
+  if the phone goes quiet for 1.5 s.
 - A station without a password is receive-only; that is enforced by the server.
 
 ## Build
@@ -49,7 +59,7 @@ iOS 17 or later.
 
 | path | what |
 |------|------|
-| `RigHelmCore/` | Swift package: the protocol (HMAC handshake, beacons, audio packets), discovery, the CAT client and its polling, the audio link, and the FTDX3000 state parser (a port of righelm's `ftdx3000-cat`). Unit tests: `swift test`. |
+| `RigHelmCore/` | Swift package: the protocol (HMAC handshake, beacons, audio packets), discovery, the CAT client and its polling, the audio link, the CW keyer and `KEY` session (a port of righelm's `cw.rs`), and the FTDX3000 state parser (a port of righelm's `ftdx3000-cat`). Unit tests: `swift test`. |
 | `RigHelmCore/Sources/rhcheck` | Command-line check against a real server. Read-only: transmit is locked and no Set is sent. |
 | `RigHelm/App` | `RigController`: connection, audio, phone mic and transmit safety. |
 | `RigHelm/Audio` | AVAudioEngine playback with a jitter buffer; microphone capture resampled to 20 ms frames. |
@@ -69,5 +79,4 @@ cd RigHelmCore && RIGHELM_PASSWORD=... swift run rhcheck listen 192.168.10.223 1
 
 ## Not in this version
 
-The band scope and audio waterfall, the CW key (KEY sessions), memories, macros and the
-menu editor.
+The band scope and audio waterfall, memories, macros and the menu editor.

@@ -121,3 +121,83 @@ final class StateTests: XCTestCase {
         XCTAssertEqual(Frequency.setCommand(vfoB: true, hz: 14_074_000), "FB14074000;")
     }
 }
+
+/// Records key transitions with timestamps.
+private final class RecorderLine: KeyLine {
+    private let lock = NSLock()
+    private var events: [(Bool, TimeInterval)] = []
+    var log: [(Bool, TimeInterval)] { lock.withLock { events } }
+    func set(_ down: Bool) throws { lock.withLock { events.append((down, ProcessInfo.processInfo.systemUptime)) } }
+    func keepalive(_ down: Bool) throws {}
+    func close() {}
+}
+
+final class KeyerTests: XCTestCase {
+    private func keyer(_ mode: KeyerMode, wpm: Int) -> (CwKeyer, RecorderLine) {
+        let line = RecorderLine()
+        let k = CwKeyer(mode: mode, wpm: wpm) { line }
+        Thread.sleep(forTimeInterval: 0.05)
+        return (k, line)
+    }
+
+    /// Key-down lengths in dits.
+    private func downs(_ log: [(Bool, TimeInterval)], dit: Double) -> [Int] {
+        zip(log, log.dropFirst()).filter { $0.0.0 && !$0.1.0 }.map { Int((($0.1.1 - $0.0.1) / dit).rounded()) }
+    }
+
+    func testMorsePlan() {
+        XCTAssertEqual(morsePlan("E").map { [$0.0 ? 1 : 0, $0.1] }, [[1, 1], [0, 3]])
+        XCTAssertEqual(morsePlan("A B").map { [$0.0 ? 1 : 0, $0.1] },
+                       [[1, 1], [0, 1], [1, 3], [0, 7], [1, 3], [0, 1], [1, 1], [0, 1], [1, 1], [0, 1], [1, 1], [0, 3]])
+    }
+
+    func testTextIsSentWithCorrectTiming() {
+        let (k, line) = keyer(.iambicB, wpm: 40) // 30 ms dits
+        k.input(.text("PARIS"))
+        Thread.sleep(forTimeInterval: 1.6)
+        k.stop()
+        let log = line.log
+        XCTAssertEqual(downs(log, dit: 0.030), [1, 3, 3, 1, 1, 3, 1, 3, 1, 1, 1, 1, 1, 1])
+        XCTAssertEqual(log.last?.0, false, "key left up")
+    }
+
+    func testSqueezeAlternatesAndReleaseStops() {
+        let (k, line) = keyer(.iambicB, wpm: 40)
+        k.input(.paddles(dit: true, dah: true))
+        Thread.sleep(forTimeInterval: 0.5)
+        k.input(.paddles(dit: false, dah: false))
+        Thread.sleep(forTimeInterval: 0.3)
+        k.stop()
+        let d = downs(line.log, dit: 0.030)
+        XCTAssertGreaterThanOrEqual(d.count, 3, "\(d)")
+        XCTAssertTrue(zip(d, d.dropFirst()).allSatisfy { $0 != $1 }, "alternates: \(d)")
+        XCTAssertEqual(line.log.last?.0, false)
+    }
+
+    func testStraightKeyFollows() {
+        let (k, line) = keyer(.straight, wpm: 20)
+        k.input(.straight(true))
+        Thread.sleep(forTimeInterval: 0.08)
+        k.input(.straight(false))
+        Thread.sleep(forTimeInterval: 0.05)
+        XCTAssertEqual(line.log.map(\.0), [true, false])
+        k.stop()
+    }
+
+    func testStoppingLetsGo() {
+        let (k, line) = keyer(.straight, wpm: 20)
+        k.input(.straight(true))
+        Thread.sleep(forTimeInterval: 0.05)
+        k.stop()
+        Thread.sleep(forTimeInterval: 0.15)
+        XCTAssertEqual(line.log.last?.0, false)
+        XCTAssertFalse(k.status.ready)
+    }
+
+    func testOpenFailureIsReported() {
+        let k = CwKeyer(mode: .iambicB, wpm: 20) { throw RemoteError.denied("this server does not allow transmit") }
+        Thread.sleep(forTimeInterval: 0.05)
+        XCTAssertEqual(k.status.error, "this server does not allow transmit")
+        k.stop()
+    }
+}

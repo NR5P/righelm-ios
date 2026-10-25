@@ -50,7 +50,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Transmit")
                 } footer: {
-                    Text("While this is off, nothing that keys the radio leaves the phone: PTT, MOX, TUNE and VOX are refused. It stays on until you turn it off. The radio is also let go when the app goes to the background, after the time-out, and by the station if the phone drops off the network.")
+                    Text("While this is off, nothing that keys the radio leaves the phone: PTT, MOX, TUNE, VOX and the CW key are refused. It stays on until you turn it off. The radio is also let go when the app goes to the background, after the time-out, and by the station if the phone drops off the network.")
                 }
 
                 Section {
@@ -71,6 +71,17 @@ struct SettingsView: View {
                     Text("Phone microphone")
                 } footer: {
                     Text("Switch between the radio's and the phone's mic on the Operate page. The phone mic sets the radio's AM, FM and SSB MIC SEL menus (053, 085, 103) to USB and puts them back when you switch off or disconnect. Speak at a normal level: peaks should stay out of the red.")
+                }
+
+                Section {
+                    Picker("Phone key type", selection: $rig.keyerMode) {
+                        ForEach(KeyerMode.allCases) { m in Text(m.label).tag(m) }
+                    }
+                    Toggle("Sidetone on this phone", isOn: $rig.cwSidetone)
+                } header: {
+                    Text("CW key")
+                } footer: {
+                    Text("RADIO KEY / PHONE KEY on the Operate page picks where CW comes from. The app always starts on the radio's key. The phone key puts the radio in CW with break-in on, and the paddles take the place of push-to-talk. The speed is the radio's keyer speed. It goes back to the radio's key when the station disconnects, the radio leaves CW, transmit is locked, the app goes to the background, or after 10 minutes unused. A key held down longer than 6 seconds is released, and the station lets go if the phone goes quiet.")
                 }
 
                 Section("General") {

@@ -12,6 +12,7 @@ struct OperateView: View {
                 ConnectionBanner()
                 FrequencyCard()
                 MeterCard()
+                if rig.cwArmed { CWKeyCard() }
                 TuningCard()
                 BandModeCard()
                 VFOCard()
@@ -27,7 +28,7 @@ struct OperateView: View {
             Color.clear.frame(height: 0).background(Theme.background)
         }
         .safeAreaInset(edge: .bottom) {
-            PTTBar()
+            if rig.cwArmed { PaddleBar() } else { PTTBar() }
         }
     }
 }
@@ -523,6 +524,9 @@ struct TransmitCard: View {
                     LEDButton(title: rig.phoneMic ? "PHONE MIC" : "RADIO MIC", on: rig.phoneMic, color: Theme.red) {
                         rig.setPhoneMic(!rig.phoneMic)
                     }
+                    LEDButton(title: rig.cwArmed ? "PHONE KEY" : "RADIO KEY", on: rig.cwArmed, color: Theme.red) {
+                        rig.setPhoneKey(!rig.cwArmed)
+                    }
                     LEDButton(title: "MOX", on: rig.latched || (s.transmitting && rig.txStartedAt != nil), color: Theme.red) {
                         rig.toggleLatch()
                     }
@@ -536,6 +540,11 @@ struct TransmitCard: View {
                 Text(statusLine)
                     .font(.caption)
                     .foregroundStyle(rig.sendingMic ? Theme.red : .secondary)
+                if let why = rig.cwDisarmedReason, !rig.cwArmed {
+                    Text("Back to the radio's key: \(why)")
+                        .font(.caption)
+                        .foregroundStyle(Theme.amber)
+                }
                 HStack(spacing: 6) {
                     Text("ANT").font(.caption2.bold()).foregroundStyle(Theme.dim)
                     ForEach(1...3, id: \.self) { a in

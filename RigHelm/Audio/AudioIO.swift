@@ -143,10 +143,51 @@ final class JitterBuffer {
     }
 }
 
+/// A CW sidetone mixed into playback while the phone key is down: over a
+/// network the radio's own sidetone comes back too late to send by.
+final class Sidetone {
+    private struct State {
+        var enabled = false
+        var down = false
+        var hz: Float = 700
+        var volume: Float = 0.3
+        var phase: Float = 0
+        var amp: Float = 0
+    }
+
+    private let state = OSAllocatedUnfairLock(initialState: State())
+
+    func setEnabled(_ on: Bool) {
+        state.withLock { $0.enabled = on }
+    }
+
+    /// From the keyer thread.
+    func key(_ down: Bool) {
+        state.withLock { $0.down = down }
+    }
+
+    /// On the audio thread: add the tone to `out`.
+    func mix(into out: UnsafeMutablePointer<Float>, count n: Int, rate: Float) {
+        state.withLock { s in
+            let target: Float = s.enabled && s.down ? 1 : 0
+            guard target > 0 || s.amp > 0 else { return }
+            let step = 2 * Float.pi * s.hz / rate
+            let ramp = 1 / (rate * 0.004) // 4 ms rise and fall: no clicks
+            for i in 0..<n {
+                s.amp = s.amp < target ? min(s.amp + ramp, target) : max(s.amp - ramp, target)
+                s.phase += step
+                if s.phase > 2 * Float.pi { s.phase -= 2 * Float.pi }
+                out[i] += sin(s.phase) * s.amp * s.volume
+            }
+        }
+    }
+}
+
 /// Plays the radio's audio and, when asked, captures the phone's
 /// microphone as 20 ms frames at the stream's sample rate.
 final class AudioIO {
     let buffer = JitterBuffer()
+    let sidetone = Sidetone()
     private var engine = AVAudioEngine()
     private var converter: AVAudioConverter?
     private var micPending: [Int16] = []
@@ -175,11 +216,14 @@ final class AudioIO {
         buffer.configure(rate: rate)
         guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(rate), channels: 1, interleaved: false) else { return }
         let buf = buffer
+        let tone = sidetone
+        let toneRate = Float(rate)
         let source = AVAudioSourceNode(format: format) { _, _, frames, abl in
             let list = UnsafeMutableAudioBufferListPointer(abl)
             for b in list {
                 if let data = b.mData?.assumingMemoryBound(to: Float.self) {
                     buf.read(into: data, count: Int(frames))
+                    tone.mix(into: data, count: Int(frames), rate: toneRate)
                 }
             }
             return noErr
